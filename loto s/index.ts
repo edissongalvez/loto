@@ -1,22 +1,27 @@
+import dotenv from 'dotenv'
+import cors from 'cors'
 import express, { Request, Response } from 'express'
-import mysql, { Connection } from 'mysql'
-import sql, { ConnectionPool, Request as SqlRequest } from 'mssql'
+import mysql, { Connection, ConnectionConfig, MysqlError } from 'mysql'
+import sql, { ConnectionPool, TYPES } from 'mssql'
+
+dotenv.config()
 
 const app = express()
+app.use(cors())
 
-const mysqlConfig = {
-    host: 'localhost',
-    user: '', // Agregar usuario (MySQL)
-    password: '', // Agregar contraseña (MySQL)
+let mysqlConfig: ConnectionConfig = {
+    host: process.env.MYSQL_HOST,
+    user: process.env.MYSQL_USERNAME,
+    password: process.env.MYSQL_PASSWORD,
 }
 
-const sqlConfig = {
-    server: '', // Agregar servidor (SQL Server)
+let sqlConfig = {
+    server: process.env.SQLSERVER_HOST ?? '',
     authentication: {
         type: 'default',
         options: {
-            userName: '', // Agregar usuario (SQL Server)
-            password: '' // Agregar contraseña (SQL Server)
+            userName: process.env.SQLSERVER_USERNAME,
+            password: process.env.SQLSERVER_PASSWORD
         }
     },
     database: 'master',
@@ -31,40 +36,328 @@ app.get('/', (req: Request, res: Response) => {
 })
 
 app.get('/database', async (req: Request, res: Response) => {
+    mysqlConfig = {
+        host: process.env.MYSQL_HOST,
+        user: process.env.MYSQL_USERNAME,
+        password: process.env.MYSQL_PASSWORD,
+    }
+    
+    sqlConfig = {
+        server: process.env.SQLSERVER_HOST ?? '',
+        authentication: {
+            type: 'default',
+            options: {
+                userName: process.env.SQLSERVER_USERNAME,
+                password: process.env.SQLSERVER_PASSWORD
+            }
+        },
+        database: 'master',
+        options: {
+            encrypt: true,
+            trustServerCertificate: true
+        }
+    }
+
     try {
+        const mysqlConnection: Connection = mysql.createConnection(mysqlConfig)
+        const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
+
+        const [mysqlResults, sqlResults] = await Promise.all([
+            new Promise<string[]>((resolve, reject) => {
+                mysqlConnection.connect(err => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+
+                    mysqlConnection.query('SHOW DATABASES', (error, results) => {
+                        if (error) {
+                            reject(error)
+                        } else {
+                            resolve(results.map((result: any) => result.Database))
+                        }
+                    })
+                })
+            }),
+            new Promise<string[]>((resolve, reject) => {
+                sqlConnection.connect().then(() => {
+                    sqlConnection.query('SELECT name FROM sys.databases').then(result => {
+                        resolve(result?.recordset.map((db: any) => db.name) || [])
+                    }).catch(err => {
+                        reject(err)
+                    })
+                }).catch(err => {
+                    reject(err)
+                })
+            })
+        ])
+
+        res.json([
+            ...mysqlResults.map(name => ({ dbType: 'MySQL', user: process.env.MYSQL_USERNAME, password: process.env.MYSQL_PASSWORD, host: process.env.MYSQL_HOST, port: '3306', name })),
+            ...sqlResults.map(name => ({ dbType: 'SQL Server', user: process.env.SQLSERVER_USERNAME, password: process.env.SQLSERVER_PASSWORD, host: process.env.SQLSERVER_HOST, port: '1433', name }))
+        ])
+
+        mysqlConnection.end()   
+        sqlConnection.close()
+    } catch (error: any) {
+        res.status(500).json({ error: error.message })
+    }
+})
+
+app.get('/database/connect', async (req: Request, res: Response) => {
+    const { user, password, host, port, name } = req.query as {
+        user: string
+        password: string
+        host: string
+        port: string
+        name: string
+    }
+
+    if (!host || !user || !password || !name || !port) {
+        return res.status(400).json({ error: 'Información incompleta', host, user, password, name, port })
+    }
+
+    mysqlConfig = {
+        host,
+        user,
+        password,
+        database: name,
+        port: parseInt(port, 10)
+    }
+
+    sqlConfig = {
+        server: host,
+        authentication: {
+            type: 'default',
+            options: {
+                userName: user,
+                password: password
+            }
+        },
+        database: name,
+        options: {
+            encrypt: true,
+            trustServerCertificate: true
+        }
+    }
+
+    try {
+        const mysqlConnection: Connection = mysql.createConnection(mysqlConfig)
+        await new Promise<void>((resolve, reject) => {
+            mysqlConnection.connect((err) => {
+                if (err) {
+                    reject(err)
+                } else {
+                    resolve()
+                }
+            })
+        })
+
+        res.json({
+            dbType: 'MySQL',
+            user,
+            password,
+            host,
+            port,
+            name
+        })
+
+        mysqlConnection.end()
+    } catch (mysqlError: any) {
+        console.error('Error al conectar a MySQL', mysqlError.message)
+
+        try {
+            const sqlConnection: ConnectionPool = await sql.connect(sqlConfig)
+
+            res.json({
+                dbType: 'SQL Server',
+                user,
+                password,
+                host,
+                port,
+                name
+            })
+
+            await sqlConnection.close()
+        } catch (sqlError: any) {
+            console.error('Error al conectar a SQL Server', sqlError.message)
+            return res.status(500).json({ error: 'Error al conectar a la base de datos' })
+        }
+    }
+})
+
+app.get('/database/table', async (req: Request, res: Response) => {
+    const { dbType } = req.query as { dbType: string }
+
+    if (!dbType) {
+        return res.status(400).json({ error: 'Información incompleta' })
+    }
+
+    if (dbType === 'MySQL') {
         const mysqlConnection: Connection = mysql.createConnection(mysqlConfig)
         mysqlConnection.connect()
 
-        mysqlConnection.query('SHOW DATABASES', (error, results) => {
+        mysqlConnection.query('SHOW TABLES', async (error: MysqlError | null, results: any) => {
             if (error) {
-                res.status(500).json({ error: error.message })
-                return
+                console.error('Error al obtener tablas', error.message)
+                return res.status(500).json({ error: 'Error al obtener tablas' })
             }
-            const mysqlDatabases: string[] = results.map((result: any) => result.Database)
 
-            const sqlPool = new sql.ConnectionPool(sqlConfig)
-            sqlPool.connect().then(() => {
-                const request: SqlRequest = new sql.Request(sqlPool)
-
-                request.query('SELECT name FROM sys.databases').then((result) => {
-                    const sqlServerDatabases: string[] = result?.recordset.map((db: any) => db.name) || []
-
-                    sqlPool.close()
-                    mysqlConnection.end()
-
-                    res.json({
-                        mysql: mysqlDatabases,
-                        sqlServer: sqlServerDatabases,
+            const tables: string[] = results.map((table: any) => table[`Tables_in_${mysqlConnection.config.database}`])
+            const tableInfoPromises: Promise<{ table: string, columns: any[] }>[] = tables.map((table: string) => {
+                return new Promise((resolve, reject) => {
+                    mysqlConnection.query(`SHOW COLUMNS FROM ${table}`, (error: MysqlError | null, columns: any[]) => {
+                        if (error) return reject(error)
+                        resolve({ table, columns })
                     })
-                }).catch((err) => {
-                    res.status(500).json({ error: err.message })
                 })
-            }).catch((err) => {
-                res.status(500).json({ error: err.message })
             })
+
+            try {
+                const tableInfo = await Promise.all(tableInfoPromises)
+                res.json(tableInfo)
+            } catch (error: any) {
+                console.error('Error al obtener tablas', error.message)
+            } finally {
+                mysqlConnection.end()
+            }
         })
+    } else {
+        const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
+
+        try {
+            sqlConnection.connect()
+            const result = await sqlConnection.request().query("SELECT TABLE_NNAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'")
+
+            const tables = result.recordset.map((row: any) => row.TABLE_NAME)
+            const tableInfoPromises: Promise<{ table: string, columns: any[] }>[] = tables.map((table: string) => {
+                return new Promise(async (resolve, reject) => {
+                    try {
+                        const columnsResult = await sqlConnection.request()
+                            .input('table', TYPES.NVarChar, table)
+                            .query('SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @table')
+
+                        const columns = columnsResult.recordset.map((row: any) => row.COLUMN_NAME)
+                        resolve({ table, columns })
+                    } catch (error) {
+                        reject(error)
+                    }
+                })
+            })
+
+            const tableInfo = await Promise.all(tableInfoPromises)
+            res.json(tableInfo)
+        } catch (error: any) {
+            console.error('Error al obtener tablas', error.message)
+            res.status(500).json({ error: 'Error al obtener tablas' })
+        } finally {
+            await sqlConnection.close()
+        }        
+    }  
+})
+
+app.get('/database/table/sequentialRecords', async (req: Request, res: Response) => {
+    const { dbType, table, idColumn } = req.query as {
+        dbType: string
+        table: string
+        idColumn: string
+    }
+
+    console.log(dbType, table, idColumn)
+
+    if (!dbType || !table || !idColumn) {
+        return res.status(400).json({ error: 'Información incompleta' })
+    }
+
+    async function getRowsFromQuery(query: any): Promise<any[]> {
+        const [rows] = await query;
+        return rows;
+    }
+
+    try {
+        let registers: any[] = []
+        if (dbType === 'MySQL') {
+            const mysqlConnection: Connection = mysql.createConnection(mysqlConfig)
+            await mysqlConnection.connect()
+            const result = await mysqlConnection.query(`SELECT * FROM ${table} ORDER BY ${idColumn}`)
+            const registers = await getRowsFromQuery(result)
+            await mysqlConnection.end()
+        } else {
+            const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
+            await sqlConnection.connect()
+            const result = await sqlConnection.request().query(`SELECT * FROM ${table} ORDER BY ${idColumn}`)
+            registers = result.recordset
+            await sqlConnection.close()
+        }
+
+        const exceptions = []
+        let expectedId = 1
+
+        for (const register of registers) {
+            const currentId = register[idColumn]
+            const isException = currentId !== expectedId
+            exceptions.push({ ...register, exception: isException })
+            expectedId++
+        }
+
+        return res.json(exceptions)
     } catch (error: any) {
-        res.status(500).json({ error: error.message })
+        return res.status(500).json({ error: 'Error al buscar en la base de datos' , message: error })
+    }
+})
+
+app.get('/database/table/fieldIntegrity', async (req: Request, res: Response) => {
+    const { dbType, table, column, value } = req.query as {
+        dbType: string
+        table: string
+        column: string
+        value: string
+    }
+
+    if (!dbType || !table || !column || !value) {
+        return res.status(400).json({ error: 'Información incompleta' })
+    }
+
+    let valueArray = value.split(',').map((val: any) => val.trim())
+
+    if (value.indexOf(',') === -1 && value.indexOf('-') !== -1) {
+        const [start, end] = value.split('-').map((val: any) => parseInt(val.trim()))
+        if (!isNaN(start) && !isNaN(end)) {
+            valueArray = Array.from({ length: end - start + 1 }, (_, index) => start + index).map(String)
+        }
+    }
+
+    async function getRowsFromQuery(query: any): Promise<any[]> {
+        const [rows] = await query;
+        return rows;
+    }
+
+    async function getRowsFromQueryAlt(query: any): Promise<any[]> {
+        const result: sql.IResult<any> = await query;
+        return result.recordset;
+    }
+
+    try {
+        let rows: any[] = []
+        if (dbType === 'MySQL') {
+            const mysqlConnection: Connection = await mysql.createConnection(mysqlConfig)
+            await mysqlConnection.connect()
+            const result = await mysqlConnection.query(`SELECT * FROM ${table} WHERE ${column} IN (?)`, [valueArray])
+            rows = await getRowsFromQuery(result)
+            await mysqlConnection.end();
+        } else {
+            const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
+            await sqlConnection.connect()
+            const result = await sqlConnection.request().query(`SELECT * FROM ${table} WHERE ${column} IN (${[valueArray]})`)
+            rows = await getRowsFromQueryAlt(result)
+            await sqlConnection.close()
+        }
+
+        const exceptions = rows.filter((row: any) => !valueArray.includes(row[column]))
+
+        return res.json({ message: 'Búsqueda completada', result: exceptions.length > 0 ? exceptions : 'Sin excepciones' })
+    } catch (error) {
+        return res.status(500).json({ error: 'Error al buscar en la base de datos' })
     }
 })
 
