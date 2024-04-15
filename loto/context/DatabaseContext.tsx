@@ -5,6 +5,7 @@ import { ReactNode, createContext, useContext, useEffect, useState } from 'react
 interface DatabaseContextProps {
     database: Database | null
     setDatabase: (database: Database) => void
+    clearDatabase: () => void
 }
 
 interface DatabaseProviderProps {
@@ -37,6 +38,15 @@ export const DatabaseProvider = ({ children }: DatabaseProviderProps) => {
         }
     }
 
+    const clearDatabase = async () => {
+        try {
+            await AsyncStorage.removeItem('database')
+            setDatabase(null)
+        } catch (error) {
+            console.error('Error al limpiar la base de datos', error)
+        }
+    }
+
     useEffect(() => {
         loadDatabase()
     }, [])
@@ -46,7 +56,7 @@ export const DatabaseProvider = ({ children }: DatabaseProviderProps) => {
     }, [database])
 
     return (
-        <DatabaseContext.Provider value={{ database, setDatabase }}>
+        <DatabaseContext.Provider value={{ database, setDatabase, clearDatabase }}>
             {children}
         </DatabaseContext.Provider>
     )

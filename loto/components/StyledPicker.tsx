@@ -18,7 +18,7 @@ export function Picker<T>({ items, label, value, selectedValue, onValueChange }:
     return (
         <DefaultPicker selectedValue={selectedValue} onValueChange={onValueChange} style={styles.container}>
             {items.map((item, index) => (
-                <DefaultPicker.Item key={index} label={String(item[label])} value={item[value]} color={color} />
+                <DefaultPicker.Item key={index} label={String(item[label])} value={item[value]} color={color} fontFamily='SFPro' />
             ))}
         </DefaultPicker>
     )

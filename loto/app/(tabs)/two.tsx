@@ -7,29 +7,32 @@ import DatabaseController, { Table } from '@/controllers/database'
 import { useDatabase } from '@/context/DatabaseContext'
 import { Picker } from '@/components/StyledPicker'
 import { Button } from '@/components/StyledButton'
+import { AxiosError } from 'axios'
 
 export default function TabTwoScreen() {
-  const { database, setDatabase } = useDatabase()
+  const { database, setDatabase, clearDatabase } = useDatabase()
   const [tables, setTables] = useState<Table[]>([])
   const [selectedTable, setSelectedTable] = useState<string>('')
   const [selectedColumn, setSelectedColumn] = useState<string>('')
   const [result, setResult] = useState<string[]>()
 
   useEffect(() => {
-    database && DatabaseController.getTables(database.dbType).then(tables => setTables(tables))
+    database && DatabaseController.getTables(database.dbType).then(tables => setTables(tables)).catch(AxiosError => clearDatabase())
   }, [database])
 
   const handleTableChange = (itemValue: string) => {
     setSelectedTable(itemValue)
     setSelectedColumn('')
+    console.log('Valor A:', itemValue, 'Tabla:', selectedTable, 'Columna:', selectedColumn)
   }
 
   const handleColumnChange = (itemValue: string) => {
     setSelectedColumn(itemValue)
+    console.log('Valor B:', itemValue, 'Tabla:', selectedTable, 'Columna:', selectedColumn)
   }
 
-  const identifyExceptions = async (dbType: string, table: string, column: string) => {
-    DatabaseController.sequentialRecords(dbType, table, column).then(result => setResult(result))
+  const identifyExceptions = async (dbType: string, user: string, password: string, host: string, port: string, name: string, table: string, column: string) => {
+    DatabaseController.sequentialRecords(dbType, user, password, host, port, name, table, column).then(result => setResult(result))
   }
 
   return (
@@ -48,7 +51,7 @@ export default function TabTwoScreen() {
               selectedValue={selectedColumn} 
               onValueChange={handleColumnChange} 
             />
-            <Button label='Ejecutar' action={() => identifyExceptions(database.dbType, selectedTable, selectedColumn)} />
+            <Button label='Ejecutar' action={() => identifyExceptions(database.dbType, database.user, database.password, database.host, database.port, database.name, selectedTable, selectedColumn)} />
           </>
           }
         </>

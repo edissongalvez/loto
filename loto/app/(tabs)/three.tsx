@@ -10,29 +10,28 @@ import { Button } from '@/components/StyledButton'
 import { TextField } from '@/components/StyledTextField'
 
 export default function TabThreeScreen() {
-  const { database, setDatabase } = useDatabase()
+  const { database, setDatabase, clearDatabase } = useDatabase()
   const [tables, setTables] = useState<Table[]>([])
   const [selectedTable, setSelectedTable] = useState<string>('')
   const [selectedColumn, setSelectedColumn] = useState<string>('')
   const [value, setValue] = useState<string>('')
+  const [result, setResult] = useState<string[]>()
 
   useEffect(() => {
-    database && DatabaseController.getTables(database.dbType).then(tables => setTables(tables))
+    database && DatabaseController.getTables(database.dbType).then(tables => setTables(tables)).catch(AxiosError => clearDatabase())
   }, [database])
 
   const handleTableChange = (itemValue: string) => {
     setSelectedTable(itemValue)
-    console.log(itemValue)
     setSelectedColumn('')
   }
 
   const handleColumnChange = (itemValue: string) => {
     setSelectedColumn(itemValue)
-    console.log(itemValue)
   }
 
-  const identifyExceptions = async (dbType: string, table: string, column: string, value: string) => {
-    DatabaseController.fieldIntegrity(dbType, table, column, value)
+  const identifyExceptions = async (dbType: string, user: string, password: string, host: string, port: string, name: string, table: string, column: string, value: string) => {
+    DatabaseController.fieldIntegrity(dbType, user, password, host, port, name, table, column, value).then(result => setResult(result))
   }
 
   return (
@@ -42,22 +41,23 @@ export default function TabThreeScreen() {
         <>
           <Text textStyle='Body' colorStyle='Primary'>Seleccionar tabla</Text>
           { tables && <Picker items={tables} label='table' value='table' selectedValue={selectedTable} onValueChange={handleTableChange} /> }
-          { selectedTable && <>
-            <Text textStyle='Body' colorStyle='Primary'>Seleccionar columna</Text>
-            <Picker 
-              items={tables.find(table => table.table === selectedTable)?.columns ?? []} 
-              label='Field' 
-              value='Field' 
-              selectedValue={selectedColumn} 
-              onValueChange={handleColumnChange} 
-            />
-            
-          </>
+          { selectedTable && 
+            <>
+              <Text textStyle='Body' colorStyle='Primary'>Seleccionar columna</Text>
+              <Picker 
+                items={tables.find(table => table.table === selectedTable)?.columns ?? []} 
+                label='Field' 
+                value='Field' 
+                selectedValue={selectedColumn} 
+                onValueChange={handleColumnChange} 
+              />
+            </>
           }
           { selectedColumn && <> <TextField title='Valores' value='Inserte valores' change={text => setValue(text)}  />
-          <Button label='Ejecutar' action={() => identifyExceptions(database.dbType, selectedTable, selectedColumn, value)} /> </> }
+          <Button label='Ejecutar' action={() => identifyExceptions(database.dbType, database.user, database.password, database.host, database.port, database.name, selectedTable, selectedColumn, value)} /> </> }
         </>
       ) : <Text textStyle='Body' colorStyle='Secondary'>Para iniciar, conecte una base de datos.</Text> }
+      { result && <Text textStyle='Body' colorStyle='Secondary'>{ JSON.stringify(result) }</Text> }
     </View>
   )
 }

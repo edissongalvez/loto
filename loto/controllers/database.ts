@@ -11,7 +11,16 @@ export interface Database {
 
 export interface Table {
     table: string
-    columns: string[]
+    columns: Column[]
+}
+
+export interface Column {
+    Field: string
+    Type: string
+    Null: string
+    Key: string
+    Default: string | null
+    Extra: string
 }
 
 export default class DatabaseController {
@@ -30,13 +39,18 @@ export default class DatabaseController {
         return response.data
     }
 
-    static async sequentialRecords(dbType: string, table: string, idColumn: string): Promise<string[]> {
-        const response = await axios.get<string[]>(`${process.env.EXPO_PUBLIC_API_URL}/database/table/sequentialRecords`, { params: { dbType, table, idColumn } })
+    static async sequentialRecords(dbType: string, user: string, password: string, host: string, port: string, name: string, table: string, idColumn: string): Promise<string[]> {
+        const response = await axios.get<string[]>(`${process.env.EXPO_PUBLIC_API_URL}/sequentialRecords`, { params: { dbType, user, password, host, port, name, table, idColumn } })
         return response.data
     }
 
-    static async fieldIntegrity(dbType: string, table: string, column: string, value: string): Promise<string[]> {
-        const response = await axios.get<string[]>(`${process.env.EXPO_PUBLIC_API_URL}/database/table/fieldIntegrity`, { params: { dbType, table, column, value } })
+    static async fieldIntegrity(dbType: string, user: string, password: string, host: string, port: string, name: string, table: string, column: string, value: string): Promise<string[]> {
+        const response = await axios.get<string[]>(`${process.env.EXPO_PUBLIC_API_URL}/fieldIntegrity`, { params: { dbType, user, password, host, port, name, table, column, value } })
+        return response.data
+    }
+
+    static async tableIntegrity(dbType: string, user: string, password: string, host: string, port: string, name: string, table: string, column: string, value: string): Promise<string[]> {
+        const response = await axios.get<string[]>(`${process.env.EXPO_PUBLIC_API_URL}/tableIntegrity`, { params: { dbType, user, password, host, port, name, table, column, value } })
         return response.data
     }
 }
