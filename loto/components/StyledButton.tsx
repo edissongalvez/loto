@@ -17,7 +17,7 @@ export function Button({ label, action }: ButtonProps) {
     return (
         <Pressable onPress={action}>
             <View style={[{ backgroundColor }, style.container]}>
-                <Text textStyle='Body' colorStyle='Primary'>{label}</Text>
+                <Text textStyle='Body' colorStyle='White'>{label}</Text>
             </View>
         </Pressable>
     )

@@ -31,13 +31,19 @@ const textStyles: TextStyle = {
 }
 
 type ColorStyle = {
-  [key in 'Primary' | 'Secondary' | 'Tertiary']: string
+  [key in 'Primary' | 'Secondary' | 'Tertiary' | 'Tint' | 'Red' | 'Orange' | 'Yellow' | 'White']: string
 }
 
 const colorStyles: ColorStyle = {
   'Primary': Colors[colorScheme ?? 'light'].textPrimary,
   'Secondary': Colors[colorScheme ?? 'light'].textSecondary,
   'Tertiary': Colors[colorScheme ?? 'light'].textTertiary,
+
+  'Tint': Colors[colorScheme ?? 'light'].tint,
+  'Red': Colors[colorScheme ?? 'light'].red,
+  'Orange': Colors[colorScheme ?? 'light'].orange,
+  'Yellow': Colors[colorScheme ?? 'light'].yellow,
+  'White': '#FFFFFF'
 }
 
 interface TextProps {

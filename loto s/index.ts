@@ -2,7 +2,7 @@ import dotenv from 'dotenv'
 import cors from 'cors'
 import express, { Request, Response } from 'express'
 import mysql, { Connection, ConnectionConfig, MysqlError } from 'mysql'
-import sql, { ConnectionPool, TYPES } from 'mssql'
+import sql, { ConnectionPool, IResult, TYPES } from 'mssql'
 import { register } from 'module'
 import { resolve } from 'path'
 
@@ -106,7 +106,7 @@ app.get('/database', async (req: Request, res: Response) => {
     }
 })
 
-app.get('/database/connect', async (req: Request, res: Response) => {
+app.get('/connect', async (req: Request, res: Response) => {
     const { user, password, host, port, name } = req.query as {
         user: string
         password: string
@@ -164,7 +164,9 @@ app.get('/database/connect', async (req: Request, res: Response) => {
             name
         })
 
-        mysqlConnection.end()
+        console.log('Conectado a MySQL')
+
+        await mysqlConnection.end()
     } catch (mysqlError: any) {
         console.error('Error al conectar a MySQL', mysqlError.message)
 
@@ -180,6 +182,8 @@ app.get('/database/connect', async (req: Request, res: Response) => {
                 name
             })
 
+            console.log('Conectado a SQL Server')
+
             await sqlConnection.close()
         } catch (sqlError: any) {
             console.error('Error al conectar a SQL Server', sqlError.message)
@@ -188,11 +192,42 @@ app.get('/database/connect', async (req: Request, res: Response) => {
     }
 })
 
-app.get('/database/table', async (req: Request, res: Response) => {
-    const { dbType } = req.query as { dbType: string }
+app.get('/table', async (req: Request, res: Response) => {
+    const { dbType, user, password, host, port, name } = req.query as { 
+        dbType: string
+        user: string
+        password: string
+        host: string
+        port: string
+        name: string
+    }
 
-    if (!dbType) {
+    if (!dbType || !user || !password || !host || !port  || !name) {
         return res.status(400).json({ error: 'Información incompleta' })
+    }
+
+    mysqlConfig = {
+        host,
+        user,
+        password,
+        database: name,
+        port: parseInt(port, 10)
+    }
+
+    sqlConfig = {
+        server: host,
+        authentication: {
+            type: 'default',
+            options: {
+                userName: user,
+                password: password
+            }
+        },
+        database: name,
+        options: {
+            encrypt: true,
+           trustServerCertificate: true
+        }
     }
 
     if (dbType === 'MySQL') {
@@ -228,33 +263,42 @@ app.get('/database/table', async (req: Request, res: Response) => {
         const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
 
         try {
-            sqlConnection.connect()
-            const result = await sqlConnection.request().query("SELECT TABLE_NNAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'")
+            sqlConnection.connect().then(pool => {
+                return pool.request().query("SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE'")
+            }).then((result: any) => {
+                const tables = result.recordset.map((row: any) => row.TABLE_NAME)
+                const tableInfoPromises: Promise<{ table: string, columns: any[] }>[] = tables.map((table: string) => {
+                    return new Promise(async (resolve, reject) => {
+                        try {
+                            const columnsResult = await sqlConnection.connect().then(
+                                pool => { return pool.request().input('table', TYPES.NVarChar, table).query("SELECT DISTINCT COL.name AS 'Field', TYP.name AS 'Type', COL.is_nullable AS 'Null', CASE WHEN IND.is_primary_key = 1 THEN 'PRI' ELSE '' END AS 'Key', COL.default_object_id AS 'Default', '' AS 'Extra' FROM sys.columns COL INNER JOIN sys.tables TAB ON COL.object_id = TAB.object_id INNER JOIN sys.types TYP ON COL.user_type_id = TYP.user_type_id LEFT JOIN sys.index_columns IC ON IC.object_id = TAB.object_id AND IC.column_id = COL.column_id LEFT JOIN sys.indexes IND ON IC.object_id = IND.object_id AND IC.index_id = IND.index_id WHERE TAB.name = @table") }
+                            )
 
-            const tables = result.recordset.map((row: any) => row.TABLE_NAME)
-            const tableInfoPromises: Promise<{ table: string, columns: any[] }>[] = tables.map((table: string) => {
-                return new Promise(async (resolve, reject) => {
-                    try {
-                        const columnsResult = await sqlConnection.request()
-                            .input('table', TYPES.NVarChar, table)
-                            .query('SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = @table')
-
-                        const columns = columnsResult.recordset.map((row: any) => row.COLUMN_NAME)
-                        resolve({ table, columns })
-                    } catch (error) {
-                        reject(error)
-                    }
+                            const columns = columnsResult.recordset.map((row: any) => row)
+                            resolve({ table, columns })
+                        } catch (error) {
+                            reject(error)
+                        }
+                    })
                 })
-            })
 
-            const tableInfo = await Promise.all(tableInfoPromises)
-            res.json(tableInfo)
+                Promise.all(tableInfoPromises).then(tableInfo => {
+                    res.json(tableInfo)
+                })
+            })            
+
         } catch (error: any) {
-            console.error('Error al obtener tablas', error.message)
-            res.status(500).json({ error: 'Error al obtener tablas' })
+            console.error('Error al obtener tablas SQL Server', error.message)
+            res.status(500).json({ error: 'Error al obtener tablas SQL Server' })
         } finally {
-            await sqlConnection.close()
-        }        
+            try {
+                if (sqlConnection.connected) {
+                    await sqlConnection.close()
+                }
+            } catch (error: any) {
+                console.error('Error al cerrar la conexión', error.message);
+            }
+        }   
     }  
 })
 
@@ -298,10 +342,6 @@ app.get('/sequentialRecords', async (req: Request, res: Response) => {
         }
     }
 
-    async function getRowsFromQuery(queryResult: any): Promise<any[]> {
-        const rows = queryResult.rows || [];
-        return rows;
-    }    
 
     try {
         let registers: any[] = []
@@ -316,14 +356,20 @@ app.get('/sequentialRecords', async (req: Request, res: Response) => {
                     }
                     resolve(results)
                 })
-                })
+            })
             registers = result
             await mysqlConnection.end()
         } else {
             const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
-            await sqlConnection.connect()
-            const result = await sqlConnection.request().query(`SELECT * FROM ${table} ORDER BY ${idColumn}`)
-            registers = result.recordset
+            // await sqlConnection.connect()
+            // const result = await sqlConnection.request().query(`SELECT * FROM ${table} ORDER BY ${idColumn}`)
+            const result = await sqlConnection.connect().then(
+                pool => { return pool.request().query(`SELECT * FROM ${table} ORDER BY ${idColumn}`) }
+            )
+            registers = await result.recordset.map(
+                row => ({
+                    ...row
+                }))
             await sqlConnection.close()
         }
 
@@ -409,7 +455,7 @@ app.get('/fieldIntegrity', async (req: Request, res: Response) => {
             const mysqlConnection: Connection = await mysql.createConnection(mysqlConfig)
             await mysqlConnection.connect()
             const result = await new Promise<any[]>((resolve, reject) => {
-                mysqlConnection.query(`SELECT *, CASE WHEN ${column} IN (?) THEN 0 ELSE 1 END AS exception FROM ${table}`, [valueArray], (err, results) => {
+                mysqlConnection.query(`SELECT *, CASE WHEN ${column} IN (?) THEN false ELSE true END AS exception FROM ${table}`, [valueArray], (err, results) => {
                     if (err) {
                         reject(err)
                         return
@@ -417,13 +463,24 @@ app.get('/fieldIntegrity', async (req: Request, res: Response) => {
                     resolve(results)
                 })
             })
-            rows = result
+            rows = result.map(row => ({
+                ...row,
+                exception: Boolean(row.exception)
+            }))
             await mysqlConnection.end()
         } else {
             const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
-            await sqlConnection.connect()
-            const result = await sqlConnection.request().query(`SELECT * FROM ${table} WHERE ${column} IN (${[valueArray]})`)
-            rows = await getRowsFromQueryAlt(result)
+            //await sqlConnection.connect()
+            const result = await sqlConnection.connect().then(
+                pool => { return pool.request().query(`SELECT * FROM ${table} WHERE ${column} IN (${[valueArray]})`) }
+            )
+            // const result = await sqlConnection.request().query(`SELECT * FROM ${table} WHERE ${column} IN (${[valueArray]})`)
+            // rows = await getRowsFromQueryAlt(result)
+            rows = await result.recordset.map(
+                row => ({
+                    ...row,
+                    exception: Boolean(row.exception)
+            }))
             await sqlConnection.close()
         }
 
@@ -506,13 +563,23 @@ app.get('/tableIntegrity', async (req: Request, res: Response) => {
                     resolve(results)
                 })
             })
-            rows = result
+            rows = result.map(row => ({
+                ...row,
+                exception: Boolean(row.exception)
+            }))
             await mysqlConnection.end()
         } else {
             const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
-            await sqlConnection.connect()
-            const result = await sqlConnection.request().query(`SELECT *, CASE WHEN ${column} LIKE '${regexalt}' THEN 'false' ELSE 'true' END AS exception FROM ${table}`)
-            rows = await getRowsFromQueryAlt(result)
+            // await sqlConnection.connect()
+            // const result = await sqlConnection.request().query(`SELECT *, CASE WHEN ${column} LIKE '${regexalt}' THEN 'false' ELSE 'true' END AS exception FROM ${table}`)
+            const result = await sqlConnection.connect().then(
+                pool => { return pool.request().query(`SELECT *, CASE WHEN ${column} LIKE '${regexalt}' THEN 'false' ELSE 'true' END AS exception FROM ${table}`) }
+            )
+            rows = await result.recordset.map(
+                row => ({
+                    ...row,
+                    exception: Boolean(row.exception)
+            }))
             await sqlConnection.close()
         }
 
@@ -523,11 +590,172 @@ app.get('/tableIntegrity', async (req: Request, res: Response) => {
 })
 
 app.get('/anotherException', async (req: Request, res: Response) => {
+    const { dbType, user, password, host, port, name, table, column } = req.query as {
+        dbType: string
+        user: string
+        password: string
+        host: string
+        port: string
+        name: string
+        table: string
+        column: string
+    }
 
+    if (!dbType || !user || !password || !host || !port ||!name || !table || !column ) {
+        return res.status(400).json({ error: 'Información incompleta' })
+    }
+
+    mysqlConfig = {
+        host,
+        user,
+        password,
+        database: name,
+        port: parseInt(port, 10)
+    }
+
+    sqlConfig = {
+        server: host,
+        authentication: {
+            type: 'default',
+            options: {
+                userName: user,
+                password: password
+            }
+        },
+        database: name,
+        options: {
+            encrypt: true,
+            trustServerCertificate: true
+        }
+    }
+
+    async function getRowsFromQueryAlt(query: any): Promise<any[]> {
+        const result: sql.IResult<any> = await query;
+        return result.recordset;
+    }
+
+    try {
+        let rows: any[] = []
+        if (dbType === 'MySQL') {
+            const mysqlConnection: Connection = await mysql.createConnection(mysqlConfig)
+            await mysqlConnection.connect()
+            const result = await new Promise<any[]>((resolve, reject) => {
+                mysqlConnection.query(`SELECT *, CASE WHEN ${column} IN (SELECT ${column} FROM ${table} GROUP BY ${column} HAVING COUNT(*) > 1) THEN true ELSE false END AS exception FROM ${table}`, (err, results) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(results)
+                })
+            })
+            rows = result.map(row => ({
+                ...row,
+                exception: Boolean(row.exception)
+            }))
+            await mysqlConnection.end()
+        } else {
+            const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
+            // await sqlConnection.connect()
+            // const result = await sqlConnection.request().query(`SELECT *, CASE WHEN ${column} IN (SELECT ${column} FROM ${table} GROUP BY ${column} HAVING COUNT(*) > 1) THEN true ELSE false END AS exception FROM ${table}`)
+            const result = await sqlConnection.connect().then(
+                pool => { return pool.request().query(`SELECT *, CASE WHEN ${column} IN (SELECT ${column} FROM ${table} GROUP BY ${column} HAVING COUNT(*) > 1) THEN true ELSE false END AS exception FROM ${table}`) }
+            )
+            rows = await result.recordset.map(
+                row => ({
+                    ...row,
+                    exception: Boolean(row.exception)
+            }))
+            await sqlConnection.close()
+        }
+
+        return res.json(rows)
+    } catch (error) {
+        return res.status(500).json({ error: 'Error al buscar en la base de datos' })
+    }
 })
 
 app.get('/SQLStatements', async (req: Request, res: Response) => {
+    const { dbType, user, password, host, port, name, statement } = req.query as {
+        dbType: string
+        user: string
+        password: string
+        host: string
+        port: string
+        name: string
+        statement: string
+    }
 
+    if (!dbType || !user || !password || !host || !port ||!name || !statement ) {
+        return res.status(400).json({ error: 'Información incompleta' })
+    }
+
+    mysqlConfig = {
+        host,
+        user,
+        password,
+        database: name,
+        port: parseInt(port, 10)
+    }
+
+    sqlConfig = {
+        server: host,
+        authentication: {
+            type: 'default',
+            options: {
+                userName: user,
+                password: password
+            }
+        },
+        database: name,
+        options: {
+            encrypt: true,
+            trustServerCertificate: true
+        }
+    }
+
+    if (!/^SELECT\b/i.test(statement)) {
+        console.log('Consulta invalida:', statement)
+        return res.status(400).json({ message: 'La consulta debe ser de tipo SELECT' })
+    }
+
+    try {
+        let rows: any[] = []
+        if (dbType === 'MySQL') {
+            const mysqlConnection: Connection = await mysql.createConnection(mysqlConfig)
+            await mysqlConnection.connect()
+            const result = await new Promise<any[]>((resolve, reject) => {
+                mysqlConnection.query(statement, (err, results) => {
+                    if (err) {
+                        reject(err)
+                        return
+                    }
+                    resolve(results)
+                })
+            })
+            rows = result.map(row => ({
+                ...row,
+                exception: Boolean(row.exception)
+            }))
+            await mysqlConnection.end()
+        } else {
+            const sqlConnection: ConnectionPool = new sql.ConnectionPool(sqlConfig)
+            // await sqlConnection.connect()
+            // const result = await sqlConnection.request().query(query)
+            const result = await sqlConnection.connect().then(
+                pool => { return pool.request().query(statement) }
+            )
+            rows = await result.recordset.map(
+                row => ({
+                    ...row,
+                    exception: Boolean(row.exception)
+            }))
+            await sqlConnection.close()
+        }
+
+        return res.json(rows)
+    } catch (error) {
+        return res.status(500).json({ error: 'Error al consultar' })
+    }
 })
 
 const PORT: number = 8082
